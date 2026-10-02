@@ -1,20 +1,160 @@
+import React, { useCallback, useEffect, useState } from 'react';
 import { StatusBar } from 'expo-status-bar';
-import { StyleSheet, Text, View } from 'react-native';
+import { View, Text, Pressable, StyleSheet } from 'react-native';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { useFonts } from 'expo-font';
+
+import { init, useStore, addBook, updateProgress } from './src/store';
+import WoodShelf from './src/WoodShelf';
+import AddBookModal from './src/AddBookModal';
+import BookStage from './src/BookStage';
+import { colors, font } from './src/theme';
 
 export default function App() {
+  const [fontsLoaded] = useFonts({
+    [font.regular]: require('./assets/fonts/Pretendard-Regular.ttf'),
+    [font.semibold]: require('./assets/fonts/Pretendard-SemiBold.ttf'),
+    [font.bold]: require('./assets/fonts/Pretendard-Bold.ttf'),
+  });
+
+  const state = useStore();
+  const [addVisible, setAddVisible] = useState(false);
+  const [selected, setSelected] = useState(null); // { id, origin }
+
+  useEffect(() => {
+    init();
+  }, []);
+
+  const selectBook = useCallback((book, origin) => setSelected({ id: book.id, origin }), []);
+
+  if (!fontsLoaded || !state.loaded) {
+    return <View style={styles.splash} />;
+  }
+
+  const selectedBook = selected && state.books.find((b) => b.id === selected.id);
+
   return (
-    <View style={styles.container}>
-      <Text>Open up App.js to start working on your app!</Text>
-      <StatusBar style="auto" />
-    </View>
+    <GestureHandlerRootView style={styles.fill}>
+      <View style={styles.fill}>
+        <StatusBar style={selected ? 'light' : 'dark'} />
+
+        <View style={styles.header}>
+          <Text style={styles.headerTitle}>READTRACK</Text>
+        </View>
+
+        <WoodShelf
+          books={state.books}
+          hiddenId={selected?.id}
+          onSelectBook={selectBook}
+        />
+
+        {!selected && (
+          <View style={styles.fabWrap} pointerEvents="box-none">
+            <Pressable
+              onPress={() => setAddVisible(true)}
+              style={({ pressed }) => [styles.fab, pressed && styles.fabPressed]}
+            >
+              <View style={styles.plus}>
+                <View style={[styles.plusBar, styles.plusH]} />
+                <View style={[styles.plusBar, styles.plusV]} />
+              </View>
+              <Text style={styles.fabText}>책 꽂기</Text>
+            </Pressable>
+          </View>
+        )}
+
+        <AddBookModal
+          visible={addVisible}
+          onClose={() => setAddVisible(false)}
+          onSubmit={(payload) => {
+            addBook(payload);
+            setAddVisible(false);
+          }}
+        />
+
+        {selectedBook && (
+          <BookStage
+            key={selected.id}
+            book={selectedBook}
+            origin={selected.origin}
+            onSave={updateProgress}
+            onClosed={() => setSelected(null)}
+          />
+        )}
+      </View>
+    </GestureHandlerRootView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
+  fill: { flex: 1, backgroundColor: colors.wallTop },
+  splash: {
     flex: 1,
-    backgroundColor: '#fff',
+    backgroundColor: colors.wallTop,
+  },
+  header: {
+    paddingTop: 58,
+    paddingBottom: 10,
+    paddingHorizontal: 28,
+    backgroundColor: colors.wallTop,
+  },
+  headerTitle: {
+    fontFamily: font.bold,
+    fontSize: 18,
+    letterSpacing: 5,
+    color: colors.navy,
+  },
+  fabWrap: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 36,
     alignItems: 'center',
-    justifyContent: 'center',
+  },
+  fab: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    height: 52,
+    paddingLeft: 20,
+    paddingRight: 24,
+    borderRadius: 26,
+    backgroundColor: colors.navy,
+    shadowColor: colors.navy,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.3,
+    shadowRadius: 14,
+    elevation: 10,
+  },
+  fabPressed: {
+    transform: [{ scale: 0.96 }],
+    opacity: 0.92,
+  },
+  plus: {
+    width: 14,
+    height: 14,
+    marginRight: 10,
+  },
+  plusBar: {
+    position: 'absolute',
+    backgroundColor: '#fff',
+    borderRadius: 1,
+  },
+  plusH: {
+    left: 0,
+    right: 0,
+    top: 6,
+    height: 2,
+  },
+  plusV: {
+    top: 0,
+    bottom: 0,
+    left: 6,
+    width: 2,
+  },
+  fabText: {
+    fontFamily: font.semibold,
+    fontSize: 15,
+    color: '#fff',
+    letterSpacing: 0.3,
   },
 });
