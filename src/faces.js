@@ -17,7 +17,9 @@ const COVER_R = 5;
 // 하드커버 천(린넨) 결 — 색 없이 밝고 어두운 결만 담긴 타일이라 어떤 표지 색 위에도 얹힌다(scripts/make-texture.js).
 const LINEN = require('../assets/textures/linen.png');
 function Cloth() {
-  return <Image source={LINEN} resizeMode="repeat" style={StyleSheet.absoluteFill} />;
+  // 작은 타일 반복은 안드로이드에서 안 먹혀서, 표지만 한 큰 질감 한 장을 꽉 채워(cover) 덮는다.
+  // 책등처럼 좁은 면은 가운데만 잘려 쓰이고, 높이가 표지와 같아 결의 굵기도 같다.
+  return <Image source={LINEN} resizeMode="cover" style={StyleSheet.absoluteFill} />;
 }
 
 // 읽은 비율을 보여주는 얇은 원형 링
@@ -171,10 +173,43 @@ function pageShape(xh, xo, yt, yb, curve) {
   return `M${xh} ${yt + curve} Q${cx} ${yt - 1} ${xo} ${yt} L${xo} ${yb} Q${cx} ${yb + 1} ${xh} ${yb - curve} Z`;
 }
 
+// 하드커버 안쪽 바깥 모서리의 대각선 접힘 자국. 겉표지 천을 판지 안쪽으로 접어 넘길 때
+// 모서리를 45도로 겹쳐 접어서 생기는 선이다. 어두운 접힘선 옆에 밝은 선을 나란히 그어 천이 겹친 턱을 낸다.
+// 책등과 붙는 경첩 쪽 모서리에는 없다.
+function CornerMiters({ side, width, height }) {
+  const L = 18;
+  const x = side === 'right' ? width : 0;
+  const dx = side === 'right' ? -1 : 1;
+  const corners = [
+    { x, y: 0, dy: 1 },
+    { x, y: height, dy: -1 },
+  ];
+  return (
+    <Svg width={width} height={height} style={StyleSheet.absoluteFill} pointerEvents="none">
+      {corners.map((c, i) => {
+        const x1 = c.x + dx * 1.2;
+        const y1 = c.y + c.dy * 1.2;
+        const x2 = c.x + dx * L;
+        const y2 = c.y + c.dy * L;
+        // 접힘선에 수직인 방향으로 1px 옆에 밝은 선
+        const ox = c.dy * 0.9;
+        const oy = -dx * 0.9;
+        return (
+          <G key={i}>
+            <Path d={`M${x1} ${y1} L${x2} ${y2}`} stroke="#000" strokeOpacity={0.3} strokeWidth={1.1} strokeLinecap="round" />
+            <Path d={`M${x1 + ox} ${y1 + oy} L${x2 + ox} ${y2 + oy}`} stroke="#fff" strokeOpacity={0.2} strokeWidth={0.8} strokeLinecap="round" />
+          </G>
+        );
+      })}
+    </Svg>
+  );
+}
+
 // 펼친 책 한쪽 면. 바깥쪽으로 페이지가 쌓인 두께(stack)가 보인다.
 // side: 'left' | 'right'. 그림은 오른쪽 기준으로 그리고 왼쪽은 좌우 반전한다.
 export function PageBlock({ book, side, width, height, stack, children }) {
-  const xh = 2;
+  // 종이를 경첩(책 가운데)까지 붙인다 — 예전엔 2px 떨어져 있어서 두 쪽 사이로 표지 색이 비쳐 벌어져 보였다.
+  const xh = 0;
   const xo = width - 6;
   const yt = 6;
   const yb = height - 6;
@@ -188,7 +223,7 @@ export function PageBlock({ book, side, width, height, stack, children }) {
     layers.push(
       <Path
         key={i}
-        d={pageShape(xh, topOuter + off, yt + off * 0.12, topBottom + off * 0.6, 5)}
+        d={pageShape(xh, topOuter + off, yt + off * 0.12, topBottom + off * 0.6, 2.5)}
         fill={i % 2 ? '#F1EADC' : '#E6DCC9'}
         stroke={colors.paperEdge}
         strokeWidth={0.4}
@@ -201,6 +236,8 @@ export function PageBlock({ book, side, width, height, stack, children }) {
 
   return (
     <View style={{ width, height }}>
+      {/* 표지 안쪽(판지). 실제 하드커버는 겉표지 천이 판지 가장자리를 감싸 안쪽으로 접혀
+          들어와 있어서, 종이 둘레로 보이는 테두리에도 같은 천 결이 보인다. */}
       <View
         style={[
           StyleSheet.absoluteFill,
@@ -210,20 +247,59 @@ export function PageBlock({ book, side, width, height, stack, children }) {
             ? { borderTopLeftRadius: 1, borderBottomLeftRadius: 1 }
             : { borderTopRightRadius: 1, borderBottomRightRadius: 1 },
         ]}
-      />
+      >
+        <View style={[StyleSheet.absoluteFill, styles.boardClip, side === 'right' ? styles.boardClipRight : styles.boardClipLeft]}>
+          <Cloth />
+          {/* 판지 두께: 바깥 가장자리가 둥글게 말려 어두워지고, 그 안쪽에 천이 접힌 자리의 옅은 빛 */}
+          <View
+            style={[
+              styles.boardEdge,
+              side === 'right' ? { borderLeftWidth: 0, left: -2 } : { borderRightWidth: 0, right: -2 },
+            ]}
+          />
+          <View
+            style={[
+              styles.boardTurnIn,
+              side === 'right' ? { borderLeftWidth: 0, left: -2 } : { borderRightWidth: 0, right: -2 },
+            ]}
+          />
+          <CornerMiters side={side} width={width} height={height} />
+        </View>
+      </View>
       <Svg width={width} height={height} style={StyleSheet.absoluteFill}>
         <Defs>
           <SvgGradient id={`paper${side}`} x1="0" y1="0" x2="1" y2="0">
-            <Stop offset="0" stopColor="#D2C4A8" />
-            <Stop offset="0.07" stopColor="#EAE1CF" />
+            <Stop offset="0" stopColor="#E3D8C3" />
+            <Stop offset="0.07" stopColor="#EFE7D7" />
             <Stop offset="0.22" stopColor="#F7F2E8" />
             <Stop offset="0.85" stopColor="#F9F5EC" />
             <Stop offset="1" stopColor="#F2EBDD" />
           </SvgGradient>
+          {/* 가운데 접힌 곳(경첩) 쪽으로 종이가 말려 들어가며 어두워지는 그늘 */}
+          <SvgGradient id={`gutter${side}`} x1="0" y1="0" x2="1" y2="0">
+            {/* 진하게 짧게 끊기면 그어 놓은 선처럼 보인다 — 옅게 시작해 넓게, 천천히 사라지게 */}
+            <Stop offset="0" stopColor="#3A2E1C" stopOpacity="0.16" />
+            <Stop offset="0.03" stopColor="#3A2E1C" stopOpacity="0.11" />
+            <Stop offset="0.08" stopColor="#3A2E1C" stopOpacity="0.06" />
+            <Stop offset="0.15" stopColor="#3A2E1C" stopOpacity="0.025" />
+            <Stop offset="0.26" stopColor="#3A2E1C" stopOpacity="0" />
+          </SvgGradient>
         </Defs>
         <G transform={side === 'left' ? `translate(${width},0) scale(-1,1)` : undefined}>
+          {[7, 4.5, 2.5].map((w, k) => (
+            <Path
+              key={`shade${k}`}
+              d={pageShape(xh, topOuter + stack + 0.8, yt + stack * 0.12 + 0.8, topBottom + stack * 0.6 + 1.2, 2.5)}
+              fill="none"
+              stroke="#000"
+              strokeOpacity={0.05 + k * 0.03}
+              strokeWidth={w}
+              strokeLinejoin="round"
+            />
+          ))}
           {layers}
-          <Path d={pageShape(xh, topOuter, yt, topBottom, 5)} fill={`url(#paper${side})`} />
+          <Path d={pageShape(xh, topOuter, yt, topBottom, 2.5)} fill={`url(#paper${side})`} />
+          <Path d={pageShape(xh, topOuter, yt, topBottom, 2.5)} fill={`url(#gutter${side})`} />
         </G>
       </Svg>
       <View
@@ -367,6 +443,30 @@ const styles = StyleSheet.create({
     fontFamily: font.bold,
     fontSize: 8.5,
     color: colors.tabText,
+  },
+  // 판지 안쪽 덧칠(천 결·가장자리)이 둥근 모서리 밖으로 안 나가게 자른다
+  boardClip: { overflow: 'hidden', borderRadius: COVER_R },
+  boardClipRight: { borderTopLeftRadius: 1, borderBottomLeftRadius: 1 },
+  boardClipLeft: { borderTopRightRadius: 1, borderBottomRightRadius: 1 },
+  boardEdge: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    top: 0,
+    bottom: 0,
+    borderRadius: COVER_R,
+    borderWidth: 2,
+    borderColor: 'rgba(0,0,0,0.22)',
+  },
+  boardTurnIn: {
+    position: 'absolute',
+    left: 2,
+    right: 2,
+    top: 2,
+    bottom: 2,
+    borderRadius: COVER_R - 1,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.14)',
   },
   board: {
     borderRadius: COVER_R,
