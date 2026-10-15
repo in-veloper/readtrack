@@ -17,15 +17,27 @@ function Field({ label, children, style }) {
   );
 }
 
-export default function AddBookModal({ visible, onClose, onSubmit }) {
+// book 을 넘기면 "고치기" 모드 — 같은 시트로 제목·색·쪽수를 바꾸고 책을 뺄 수도 있다.
+export default function AddBookModal({ visible, book, onClose, onSubmit, onDelete }) {
+  const editing = !!book;
   const [title, setTitle] = useState('');
   const [totalPages, setTotalPages] = useState('');
   const [currentPage, setCurrentPage] = useState('');
   const [color, setColor] = useState(SPINE_COLORS[0]);
+  const [armed, setArmed] = useState(false);
 
   useEffect(() => {
-    if (visible) setColor(nextColor());
-  }, [visible]);
+    if (!visible) return;
+    setArmed(false);
+    if (book) {
+      setTitle(book.title);
+      setTotalPages(String(book.totalPages));
+      setCurrentPage(String(book.currentPage));
+      setColor(book.color);
+    } else {
+      setColor(nextColor());
+    }
+  }, [visible, book?.id]);
 
   const reset = () => {
     setTitle('');
@@ -61,7 +73,7 @@ export default function AddBookModal({ visible, onClose, onSubmit }) {
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.backdrop}>
         <Pressable style={StyleSheet.absoluteFill} onPress={close} />
         <View style={styles.card}>
-          <Text style={styles.heading}>새 책 꽂기</Text>
+          <Text style={styles.heading}>{editing ? '책 고치기' : '새 책 꽂기'}</Text>
 
           <View style={styles.topRow}>
             <View style={styles.previewBox}>
@@ -124,11 +136,25 @@ export default function AddBookModal({ visible, onClose, onSubmit }) {
             disabled={!valid}
             style={({ pressed }) => [styles.submit, !valid && styles.submitOff, pressed && { opacity: 0.85 }]}
           >
-            <Text style={styles.submitText}>책장에 꽂기</Text>
+            <Text style={styles.submitText}>{editing ? '저장' : '책장에 꽂기'}</Text>
           </Pressable>
-          <Pressable onPress={close} style={styles.cancel} hitSlop={6}>
-            <Text style={styles.cancelText}>취소</Text>
-          </Pressable>
+          <View style={styles.bottomRow}>
+            {editing ? (
+              // 실수로 지우지 않게 두 번 눌러야 빠진다.
+              <Pressable
+                onPress={() => (armed ? onDelete(book.id) : setArmed(true))}
+                style={[styles.cancel, armed && styles.deleteArmed]}
+                hitSlop={6}
+              >
+                <Text style={[styles.cancelText, styles.deleteText]}>
+                  {armed ? '한 번 더 누르면 빠져요' : '책장에서 빼기'}
+                </Text>
+              </Pressable>
+            ) : null}
+            <Pressable onPress={close} style={styles.cancel} hitSlop={6}>
+              <Text style={styles.cancelText}>취소</Text>
+            </Pressable>
+          </View>
         </View>
       </KeyboardAvoidingView>
     </Modal>
@@ -245,10 +271,22 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: '#fff',
   },
+  bottomRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   cancel: {
     alignSelf: 'center',
     paddingVertical: 12,
     paddingHorizontal: 20,
+    borderRadius: 12,
+  },
+  deleteArmed: {
+    backgroundColor: 'rgba(196,72,60,0.1)',
+  },
+  deleteText: {
+    color: '#C4483C',
   },
   cancelText: {
     fontFamily: font.semibold,

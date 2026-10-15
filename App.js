@@ -4,7 +4,7 @@ import { View, Text, Pressable, StyleSheet } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { useFonts } from 'expo-font';
 
-import { init, useStore, addBook, updateProgress } from './src/store';
+import { init, useStore, addBook, updateBook, removeBook, updateProgress } from './src/store';
 import WoodShelf from './src/WoodShelf';
 import AddBookModal from './src/AddBookModal';
 import BookStage from './src/BookStage';
@@ -20,18 +20,25 @@ export default function App() {
   const state = useStore();
   const [addVisible, setAddVisible] = useState(false);
   const [selected, setSelected] = useState(null); // { id, origin }
+  const [editingId, setEditingId] = useState(null);
 
   useEffect(() => {
     init();
   }, []);
 
   const selectBook = useCallback((book, origin) => setSelected({ id: book.id, origin }), []);
+  const editBook = useCallback((book) => setEditingId(book.id), []);
 
   if (!fontsLoaded || !state.loaded) {
     return <View style={styles.splash} />;
   }
 
   const selectedBook = selected && state.books.find((b) => b.id === selected.id);
+  const editingBook = editingId ? state.books.find((b) => b.id === editingId) : null;
+  const closeSheet = () => {
+    setAddVisible(false);
+    setEditingId(null);
+  };
 
   return (
     <GestureHandlerRootView style={styles.fill}>
@@ -46,6 +53,7 @@ export default function App() {
           books={state.books}
           hiddenId={selected?.id}
           onSelectBook={selectBook}
+          onEditBook={editBook}
         />
 
         {!selected && (
@@ -64,11 +72,25 @@ export default function App() {
         )}
 
         <AddBookModal
-          visible={addVisible}
-          onClose={() => setAddVisible(false)}
+          visible={addVisible || !!editingBook}
+          book={editingBook}
+          onClose={closeSheet}
           onSubmit={(payload) => {
-            addBook(payload);
-            setAddVisible(false);
+            if (editingBook) {
+              updateBook(editingBook.id, {
+                title: payload.title.trim(),
+                totalPages: payload.totalPages,
+                currentPage: Math.min(payload.currentPage, payload.totalPages),
+                color: payload.color,
+              });
+            } else {
+              addBook(payload);
+            }
+            closeSheet();
+          }}
+          onDelete={(id) => {
+            removeBook(id);
+            closeSheet();
           }}
         />
 

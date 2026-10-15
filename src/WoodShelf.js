@@ -50,7 +50,7 @@ function Shelf() {
   );
 }
 
-function WoodShelf({ books, onSelectBook, hiddenId }) {
+function WoodShelf({ books, onSelectBook, onEditBook, hiddenId }) {
   const rows = layoutRows(books);
   const shelfCount = Math.max(rows.length, 3);
 
@@ -64,7 +64,13 @@ function WoodShelf({ books, onSelectBook, hiddenId }) {
             <View key={i} style={styles.rowBlock}>
               <View style={styles.booksRow}>
                 {row.map((book) => (
-                  <BookSpine key={book.id} book={book} onPress={onSelectBook} hidden={book.id === hiddenId} />
+                  <BookSpine
+                    key={book.id}
+                    book={book}
+                    onPress={onSelectBook}
+                    onLongPress={onEditBook}
+                    hidden={book.id === hiddenId}
+                  />
                 ))}
               </View>
               <Shelf />

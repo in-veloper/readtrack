@@ -8,6 +8,8 @@ import Animated, {
   useAnimatedStyle,
   withTiming,
   withSpring,
+  withSequence,
+  withDelay,
   Easing,
   runOnJS,
   interpolate,
@@ -34,6 +36,36 @@ const BACK_MS = 560;
 const FOLD_DRAG = 240; // 펼친 책을 이만큼 위로 끌면 완전히 덮힘
 
 const CLAMP = Extrapolation.CLAMP;
+
+// 각 면은 "가운데 축 회전"만 3D로 주고(안드로이드에서 깔끔하게 분해되는 유일한 형태),
+// 경첩(책등과 맞닿은 모서리)이 제자리에 있도록 바깥 뷰에서 2D 이동/확대로 보정한다.
+// transformOrigin + perspective 조합은 안드로이드에서 행렬 분해가 꼬여 면이 뒤집히거나 부풀어서 쓰지 않는다.
+// 헬퍼는 공유값을 직접 읽지 않고 값을 인자로 받는다(위 ※ 주석 참고).
+
+// θ: 책 전체가 정면을 보도록 눕는 각, φ: 표지가 열리는 각. 두 구간을 넓게
+// 겹쳐서 "휙 눕고 → 따로 표지가 열리는" 두 동작이 아니라 한 동작으로 펼쳐지게 한다.
+function thetaOf(pv, ov) {
+  'worklet';
+  return interpolate(pv, [0, 1], [0, CLOSED_TILT]) + interpolate(ov, [0, 0.55], [0, 90 - CLOSED_TILT], CLAMP);
+}
+function phiOf(ov) {
+  'worklet';
+  return interpolate(ov, [0.08, 1], [0, 180], CLAMP);
+}
+function pin(r, xh) {
+  'worklet';
+  const rad = (r * Math.PI) / 180;
+  return {
+    transform: [
+      { translateX: xh * (1 - Math.cos(rad)) },
+      { scale: 1 + (xh * Math.sin(rad)) / PERSPECTIVE },
+    ],
+  };
+}
+function spin(r) {
+  'worklet';
+  return { transform: [{ perspective: PERSPECTIVE }, { rotateY: `${r}deg` }] };
+}
 
 export default function BookStage({ book, origin, onClosed, onSave }) {
   const tb = baseThickness(book);
@@ -78,9 +110,17 @@ export default function BookStage({ book, origin, onClosed, onSave }) {
   const openBook = () => {
     if (phase !== 'closed') return;
     setPhase('opening');
-    o.value = withTiming(1, { duration: OPEN_MS, easing: Easing.inOut(Easing.cubic) }, (done) => {
-      if (done) runOnJS(setPhase)('open');
-    });
+    // 대칭형 inOut 하나로만 쭉 가면 가속/감속이 똑같은 비중이라 기계적으로
+    // 느껴진다 — 실제로 표지를 넘기면 손이 휙 밀어준 뒤 표지 자체 무게로
+    // 천천히 가라앉고, 다 펼쳐지는 순간 경첩이 살짝 튕겼다가 멎는다. 빠르게
+    // 열리다 감속하는 구간(ease-out) 뒤에 짧은 스프링으로 마무리해서
+    // 그 "툭 열리고 사뿐히 안착하는" 느낌을 흉내 낸다.
+    o.value = withSequence(
+      withTiming(0.92, { duration: OPEN_MS * 0.8, easing: Easing.out(Easing.cubic) }),
+      withSpring(1, { damping: 11, stiffness: 110, mass: 0.6 }, (done) => {
+        if (done) runOnJS(setPhase)('open');
+      })
+    );
   };
 
   const flyBack = () => {
@@ -90,16 +130,26 @@ export default function BookStage({ book, origin, onClosed, onSave }) {
     });
   };
 
-  // 지금 펼쳐진 정도(o)에서 이어서 덮고, 다 덮이면 책장으로 돌아간다.
+  // 지금 펼쳐진 정도(o)에서 이어서 덮고 책장으로 돌아간다. 예전엔 "다 덮고 →
+  // 멈췄다 → 날아감" 두 동작이 이어 붙어서 중간에 한 번 멎었다 — 덮이는 도중에
+  // 이미 책장 쪽으로 움직이기 시작하게 겹쳐서 한 동작처럼 흘러가게 한다.
   const shelve = useCallback(() => {
     if (phase !== 'closed' && phase !== 'open') return;
     Keyboard.dismiss();
     commit();
     setPhase('out');
     if (o.value > 0.001) {
-      o.value = withTiming(0, { duration: Math.max(250, CLOSE_MS * o.value), easing: Easing.out(Easing.cubic) }, (done) => {
-        if (done) runOnJS(flyBack)();
-      });
+      const dur = Math.max(320, CLOSE_MS * o.value);
+      const lead = dur * 0.55;
+      const back = { duration: BACK_MS, easing: Easing.inOut(Easing.cubic) };
+      o.value = withTiming(0, { duration: dur, easing: Easing.inOut(Easing.quad) });
+      drag.value = withDelay(lead, withTiming(0, back));
+      p.value = withDelay(
+        lead,
+        withTiming(0, back, (done) => {
+          if (done) runOnJS(onClosed)();
+        })
+      );
     } else {
       flyBack();
     }
@@ -166,65 +216,54 @@ export default function BookStage({ book, origin, onClosed, onSave }) {
     };
   });
 
-  // 각 면은 "가운데 축 회전"만 3D로 주고(안드로이드에서 깔끔하게 분해되는 유일한 형태),
-  // 경첩(책등과 맞닿은 모서리)이 제자리에 있도록 바깥 뷰에서 2D 이동/확대로 보정한다.
-  // transformOrigin + perspective 조합은 안드로이드에서 행렬 분해가 꼬여 면이 뒤집히거나 부풀어서 쓰지 않는다.
-  const theta = () => {
-    'worklet';
-    return interpolate(p.value, [0, 1], [0, CLOSED_TILT]) + interpolate(o.value, [0, 0.2], [0, 90 - CLOSED_TILT], CLAMP);
-  };
-  const phi = () => {
-    'worklet';
-    return interpolate(o.value, [0.18, 1], [0, 180], CLAMP);
-  };
-  const pin = (r, xh) => {
-    'worklet';
-    const rad = (r * Math.PI) / 180;
-    return {
-      transform: [
-        { translateX: xh * (1 - Math.cos(rad)) },
-        { scale: 1 + (xh * Math.sin(rad)) / PERSPECTIVE },
-      ],
-    };
-  };
-  const spin = (r) => {
-    'worklet';
-    return { transform: [{ perspective: PERSPECTIVE }, { rotateY: `${r}deg` }] };
-  };
+  // ※ 각 스타일 안에서 p.value / o.value 를 "직접" 읽어야 한다. Reanimated 는
+  // 스타일 함수가 직접 붙잡은 공유값만 감시하고, 헬퍼 함수 안쪽은 들여다보지
+  // 않는다. 예전엔 theta()/phi() 헬퍼 안에서만 읽어서, 폰에서는 이 면들이
+  // 프레임마다 갱신되지 않고 phase 가 바뀌어 리렌더될 때만 한 번씩 튀었다 —
+  // 그래서 "닫힘 → (뚝) → 펼침" 두세 장면으로만 보이고, 접어서 넣을 땐 펼친
+  // 채로 책장에 날아가 꽂혔다.
 
+  // 얼굴이 뒤집히기 직전/직후를 즉시 0/1로 껐다 켜던 걸 각도 몇 도짜리
+  // 짧은 구간에서 서서히 페이드되게 바꿔서, 눈에 띄는 "뚝" 끊김을 없앤다.
   const spineOuter = useAnimatedStyle(() => {
-    const t = theta();
-    return { opacity: t < 88 ? 1 : 0, ...pin(-t, tb / 2) };
+    const t = thetaOf(p.value, o.value);
+    return { opacity: interpolate(t, [84, 90], [1, 0], CLAMP), ...pin(-t, tb / 2) };
   });
-  const spineInner = useAnimatedStyle(() => spin(-theta()));
-  const spineShade = useAnimatedStyle(() => ({ opacity: (theta() / 90) * 0.4 }));
+  const spineInner = useAnimatedStyle(() => spin(-thetaOf(p.value, o.value)));
+  const spineShade = useAnimatedStyle(() => ({ opacity: (thetaOf(p.value, o.value) / 90) * 0.4 }));
 
   const coverOuter = useAnimatedStyle(() => {
-    const a = 90 - theta() - phi();
-    return { opacity: a < 88 && a > -90 ? 1 : 0, ...pin(a, -PAGE_W / 2) };
+    const a = 90 - thetaOf(p.value, o.value) - phiOf(o.value);
+    return { opacity: interpolate(a, [-96, -90, 84, 90], [0, 1, 1, 0], CLAMP), ...pin(a, -PAGE_W / 2) };
   });
-  const coverInner = useAnimatedStyle(() => spin(90 - theta() - phi()));
+  const coverInner = useAnimatedStyle(() => spin(90 - thetaOf(p.value, o.value) - phiOf(o.value)));
   const coverShade = useAnimatedStyle(() => ({
-    opacity: (Math.abs(90 - theta() - phi()) / 90) * 0.3,
+    opacity: (Math.abs(90 - thetaOf(p.value, o.value) - phiOf(o.value)) / 90) * 0.3,
   }));
   const tabStyle = useAnimatedStyle(() => ({
     opacity: interpolate(o.value, [0, 0.1], [1, 0], CLAMP),
   }));
 
+  // 표지 뒷면(왼쪽 페이지)의 실제 각도는 표지 각도(90-θ-φ)에서 180° 돈 것.
   const leftOuter = useAnimatedStyle(() => {
-    const b = 180 - phi();
-    return { opacity: b < 90 ? 1 : 0, ...pin(b, PAGE_W / 2) };
+    const b = 270 - thetaOf(p.value, o.value) - phiOf(o.value);
+    return { opacity: interpolate(b, [84, 96], [1, 0], CLAMP), ...pin(b, PAGE_W / 2) };
   });
-  const leftInner = useAnimatedStyle(() => spin(180 - phi()));
-  const leftShade = useAnimatedStyle(() => ({ opacity: ((180 - phi()) / 90) * 0.3 }));
-
-  const rightStyle = useAnimatedStyle(() => ({
-    opacity: o.value > 0.12 ? 1 : 0,
+  const leftInner = useAnimatedStyle(() => spin(270 - thetaOf(p.value, o.value) - phiOf(o.value)));
+  const leftShade = useAnimatedStyle(() => ({
+    opacity: (Math.max(0, 270 - thetaOf(p.value, o.value) - phiOf(o.value)) / 90) * 0.3,
   }));
-  const castShadow = useAnimatedStyle(() => {
-    const phi = interpolate(o.value, [0.18, 1], [0, 180], CLAMP);
-    return { opacity: Math.sin((phi * Math.PI) / 180) * 0.4 };
-  });
+
+  // 뒤표지+남은 페이지 덩어리도 덮인 표지와 같은 몸통 각도(90-θ)로 같이 돌려서
+  // 책 전체가 한 덩어리로 기울게 한다(예전엔 늘 정면에 납작하게 남아 있었다).
+  const rightOuter = useAnimatedStyle(() => ({
+    opacity: interpolate(phiOf(o.value), [0, 6], [0, 1], CLAMP),
+    ...pin(90 - thetaOf(p.value, o.value), -PAGE_W / 2),
+  }));
+  const rightInner = useAnimatedStyle(() => spin(90 - thetaOf(p.value, o.value)));
+  const castShadow = useAnimatedStyle(() => ({
+    opacity: Math.sin((phiOf(o.value) * Math.PI) / 180) * 0.4,
+  }));
 
   const groundStyle = useAnimatedStyle(() => ({
     opacity: p.value * 0.9,
@@ -268,7 +307,8 @@ export default function BookStage({ book, origin, onClosed, onSave }) {
 
           {/* 오른쪽: 뒤표지 + 남은 페이지 */}
           {pagesReady && (
-          <Animated.View style={[styles.right, rightStyle]} renderToHardwareTextureAndroid={phase !== 'open'}>
+          <Animated.View style={[styles.right, rightOuter]} renderToHardwareTextureAndroid={phase !== 'open'}>
+            <Animated.View style={[{ width: PAGE_W, height: BOOK_H }, rightInner]}>
             <PageBlock book={book} side="right" width={PAGE_W} height={BOOK_H} stack={rightStack}>
               <Text style={styles.runningHead}>지금 읽는 곳</Text>
               <View style={styles.inputArea}>
@@ -298,6 +338,7 @@ export default function BookStage({ book, origin, onClosed, onSave }) {
                 end={{ x: 1, y: 0 }}
                 style={StyleSheet.absoluteFill}
               />
+            </Animated.View>
             </Animated.View>
           </Animated.View>
           )}

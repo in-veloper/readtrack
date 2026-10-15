@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "readtrack-web",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["-lc", "source ~/.local/stepby-toolchain/env.sh 2>/dev/null; cd /Users/matt/Claude/readtrack && npx expo start --web --port 8097"],
+      "port": 8097
+    }
+  ]
+}
