@@ -115,11 +115,14 @@ export default function BookStage({ book, origin, onClosed, onSave }) {
     // 천천히 가라앉고, 다 펼쳐지는 순간 경첩이 살짝 튕겼다가 멎는다. 빠르게
     // 열리다 감속하는 구간(ease-out) 뒤에 짧은 스프링으로 마무리해서
     // 그 "툭 열리고 사뿐히 안착하는" 느낌을 흉내 낸다.
-    o.value = withSequence(
-      withTiming(0.92, { duration: OPEN_MS * 0.8, easing: Easing.out(Easing.cubic) }),
-      withSpring(1, { damping: 11, stiffness: 110, mass: 0.6 }, (done) => {
+    // 예전엔 0.92 까지 감속해 거의 멈춘 뒤 스프링이 다시 출발시켜서, 다 펼쳐질 때쯤
+    // 한 번 "멈칫"했다. 빠르게 열리기 시작해 끝까지 한 번에 사뿐히 감속하는 곡선 하나로 잇는다.
+    o.value = withTiming(
+      1,
+      { duration: OPEN_MS, easing: Easing.bezier(0.22, 0.75, 0.25, 1) },
+      (done) => {
         if (done) runOnJS(setPhase)('open');
-      })
+      }
     );
   };
 
@@ -346,7 +349,7 @@ export default function BookStage({ book, origin, onClosed, onSave }) {
           {/* 책등 */}
           <Animated.View style={[styles.face, { width: tb, left: HINGE - tb }, spineOuter]} pointerEvents="none">
             <Animated.View style={[{ width: tb, height: BOOK_H }, spineInner]} renderToHardwareTextureAndroid>
-              <SpineFace book={book} width={tb} height={BOOK_H} />
+              <SpineFace book={book} width={tb} height={BOOK_H} joined />
               <Animated.View style={[StyleSheet.absoluteFill, styles.shade, spineShade]} />
             </Animated.View>
           </Animated.View>
