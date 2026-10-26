@@ -67,6 +67,93 @@ function spin(r) {
   return { transform: [{ perspective: PERSPECTIVE }, { rotateY: `${r}deg` }] };
 }
 
+// 읽은 쪽(왼쪽 면)에 찍히는 글 — 덮을 때 맨 윗장과 함께 넘어가도록 두 곳에서 같이 쓴다.
+function LeftPageContent({ book, pct, remain }) {
+  return (
+    <>
+      <Text numberOfLines={1} style={styles.runningHead}>
+        {book.title}
+      </Text>
+      <View style={styles.statArea}>
+        <Text style={styles.statLabel}>읽은 만큼</Text>
+        <Text style={styles.pct}>
+          {pct}
+          <Text style={styles.pctSign}>%</Text>
+        </Text>
+        <View style={styles.statRule} />
+        <Text style={styles.statLine}>
+          {book.currentPage} / {book.totalPages}쪽
+        </Text>
+        <Text style={styles.statSub}>남은 {remain}쪽</Text>
+      </View>
+      <Text style={styles.folio}>{book.currentPage}</Text>
+    </>
+  );
+}
+
+// 읽은 만큼의 종이 한 장. 덮을 때 표지만 넘어가는 게 아니라 읽은 쪽 묶음이 표지와 함께 넘어오고,
+// 맨 윗장(g 가 가장 큰 장)이 앞서고 표지가 뒤따르며 부채처럼 벌어졌다가 오른쪽에 차곡차곡 포개진다.
+// 표지 진행도 u(0 덮임 ~ 1 펼침)를 u^(1+g) 로 바꿔 장마다 앞서는 정도만 달리하고, 시작(1)과 끝(0)에서는
+// 표지와 같은 자리에 오게 한다. 표지 뒷면(왼쪽 면)과 같은 회전·보정 식을 쓴다.
+function sheetAngle(pv, ov, g) {
+  'worklet';
+  const u = phiOf(ov) / 180;
+  return 270 - thetaOf(pv, ov) - 180 * Math.pow(u, 1 + g);
+}
+
+function Sheet({ p, o, ws, hs, g, top, tone, children }) {
+  // ※ 공유값은 스타일 함수 안에서 직접 읽는다(위 주석 참고)
+  const outer = useAnimatedStyle(() => {
+    const b = sheetAngle(p.value, o.value, g);
+    // 펼친 상태에서는 맨 윗장만 보이게(아래 장들은 그 밑에 완전히 겹쳐 있다)
+    const u = phiOf(o.value) / 180;
+    return { opacity: top ? 1 : interpolate(u, [0.97, 0.99], [1, 0], CLAMP), ...pin(b, ws / 2) };
+  });
+  const inner = useAnimatedStyle(() => spin(sheetAngle(p.value, o.value, g)));
+  const shade = useAnimatedStyle(() => ({
+    opacity: Math.min(0.3, (Math.max(0, sheetAngle(p.value, o.value, g)) / 90) * 0.3),
+  }));
+
+  return (
+    <Animated.View
+      style={[styles.face, { width: ws, height: hs, top: M + 6, left: HINGE - ws }, outer]}
+      pointerEvents="none"
+    >
+      <Animated.View style={[{ width: ws, height: hs, borderRadius: 2, backgroundColor: tone }, inner]} renderToHardwareTextureAndroid>
+        {top && (
+          <>
+            {/* 왼쪽 면 종이와 같은 결(바깥은 밝고 경첩 쪽으로 어두워짐) — 펼친 상태에서 그 면과 겹쳐도 티가 안 난다 */}
+            <LinearGradient
+              colors={['#F2EBDD', '#F9F5EC', '#F7F2E8', '#EFE7D7', '#E3D8C3']}
+              locations={[0, 0.15, 0.78, 0.93, 1]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 0 }}
+              style={StyleSheet.absoluteFill}
+            />
+            <LinearGradient
+              colors={[
+                'rgba(58,46,28,0)',
+                'rgba(58,46,28,0)',
+                'rgba(58,46,28,0.025)',
+                'rgba(58,46,28,0.06)',
+                'rgba(58,46,28,0.11)',
+                'rgba(58,46,28,0.16)',
+              ]}
+              locations={[0, 0.74, 0.85, 0.92, 0.97, 1]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 0 }}
+              style={StyleSheet.absoluteFill}
+            />
+          </>
+        )}
+        {!top && <View style={[StyleSheet.absoluteFill, styles.sheetEdge]} />}
+        {children}
+        <Animated.View style={[StyleSheet.absoluteFill, styles.shade, shade]} />
+      </Animated.View>
+    </Animated.View>
+  );
+}
+
 export default function BookStage({ book, origin, onClosed, onSave }) {
   const tb = baseThickness(book);
 
@@ -281,6 +368,13 @@ export default function BookStage({ book, origin, onClosed, onSave }) {
   const leftStack = 2 + 10 * ratio;
   const rightStack = 2 + 10 * (1 - ratio);
 
+  // 덮을 때 표지와 함께 넘어오는 읽은 종이 묶음. 읽은 비율이 클수록 장수가 많고 더 넓게 벌어진다.
+  const sheetCount = book.currentPage > 0 ? Math.max(2, Math.min(8, Math.round(2 + 6 * ratio))) : 0;
+  const fan = 0.35 + 0.9 * ratio;
+  const sheetW = PAGE_W - 6 - leftStack;
+  const sheetH = BOOK_H - 12 - 0.6 * leftStack;
+  const SHEET_TONES = ['#F1EADC', '#E6DCC9'];
+
   const hintVisible = phase === 'closed' || phase === 'open';
   // 펼친 면들은 책을 다 꺼낸 뒤에 만든다(꺼내는 첫 프레임에 무거운 그림을 한꺼번에 만들면 버벅임).
   const pagesReady = phase !== 'in';
@@ -354,40 +448,49 @@ export default function BookStage({ book, origin, onClosed, onSave }) {
             </Animated.View>
           </Animated.View>
 
-          {/* 넘어가는 앞표지: 앞면 */}
+          {/* 넘어간 앞표지: 뒷면 = 읽은 페이지 (읽은 쪽이 있으면 글은 맨 윗장이 들고 있다) */}
+          {pagesReady && (
+          <Animated.View style={[styles.face, { width: PAGE_W, left: HINGE - PAGE_W }, leftOuter]} pointerEvents="none">
+            <Animated.View style={[{ width: PAGE_W, height: BOOK_H }, leftInner]} renderToHardwareTextureAndroid>
+            <PageBlock book={book} side="left" width={PAGE_W} height={BOOK_H} stack={leftStack}>
+              {sheetCount === 0 && <LeftPageContent book={book} pct={pct} remain={remain} />}
+            </PageBlock>
+            <Animated.View style={[StyleSheet.absoluteFill, styles.shade, leftShade]} />
+            </Animated.View>
+          </Animated.View>
+          )}
+
+          {/* 읽은 종이 묶음: 표지 앞쪽에서 먼저 넘어오고, 맨 윗장이 가장 앞선다 */}
+          {pagesReady &&
+            Array.from({ length: sheetCount }, (_, i) => {
+              const top = i === sheetCount - 1;
+              return (
+                <Sheet
+                  key={i}
+                  p={p}
+                  o={o}
+                  ws={sheetW}
+                  hs={sheetH}
+                  g={(fan * (i + 1)) / sheetCount}
+                  top={top}
+                  tone={SHEET_TONES[i % 2]}
+                >
+                  {top && (
+                    <View style={{ position: 'absolute', left: 10, width: sheetW - 26, top: 16, bottom: 10 }}>
+                      <LeftPageContent book={book} pct={pct} remain={remain} />
+                    </View>
+                  )}
+                </Sheet>
+              );
+            })}
+
+          {/* 넘어가는 앞표지: 앞면 — 종이 묶음보다 나중에 그려서 넘어온 뒤엔 종이를 덮는다 */}
           <Animated.View style={[styles.face, { width: PAGE_W, left: HINGE }, coverOuter]} pointerEvents="none">
             <Animated.View style={[{ width: PAGE_W, height: BOOK_H }, coverInner]} renderToHardwareTextureAndroid>
               <CoverFace book={book} width={PAGE_W} height={BOOK_H} tabStyle={tabStyle} />
               <Animated.View style={[styles.coverShadeBox, styles.shade, coverShade]} />
             </Animated.View>
           </Animated.View>
-
-          {/* 넘어간 앞표지: 뒷면 = 읽은 페이지 */}
-          {pagesReady && (
-          <Animated.View style={[styles.face, { width: PAGE_W, left: HINGE - PAGE_W }, leftOuter]} pointerEvents="none">
-            <Animated.View style={[{ width: PAGE_W, height: BOOK_H }, leftInner]} renderToHardwareTextureAndroid>
-            <PageBlock book={book} side="left" width={PAGE_W} height={BOOK_H} stack={leftStack}>
-              <Text numberOfLines={1} style={styles.runningHead}>
-                {book.title}
-              </Text>
-              <View style={styles.statArea}>
-                <Text style={styles.statLabel}>읽은 만큼</Text>
-                <Text style={styles.pct}>
-                  {pct}
-                  <Text style={styles.pctSign}>%</Text>
-                </Text>
-                <View style={styles.statRule} />
-                <Text style={styles.statLine}>
-                  {book.currentPage} / {book.totalPages}쪽
-                </Text>
-                <Text style={styles.statSub}>남은 {remain}쪽</Text>
-              </View>
-              <Text style={styles.folio}>{book.currentPage}</Text>
-            </PageBlock>
-            <Animated.View style={[StyleSheet.absoluteFill, styles.shade, leftShade]} />
-            </Animated.View>
-          </Animated.View>
-          )}
         </Animated.View>
 
         {phase === 'closed' && (
@@ -457,6 +560,11 @@ const styles = StyleSheet.create({
   },
   shade: {
     backgroundColor: '#000',
+  },
+  sheetEdge: {
+    borderWidth: 0.5,
+    borderColor: 'rgba(120,100,70,0.45)',
+    borderRadius: 2,
   },
   runningHead: {
     fontFamily: font.semibold,
