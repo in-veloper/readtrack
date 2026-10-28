@@ -58,7 +58,8 @@ export function SpineFace({ book, width, height, joined }) {
   const ringZone = ringSize + 34;
   const titleTop = 22;
   const titleLen = height - titleTop - ringZone - 10;
-  const fontSize = Math.min(19, width * 0.42);
+  // 책장에서는 0.55~0.75 배로 줄어 보이므로, 글자를 굵고 크게(두께의 절반 가까이) 잡아 작아져도 또렷하게 한다.
+  const fontSize = Math.min(23, width * 0.5);
 
   return (
     <View style={[styles.spine, { width, height, backgroundColor: book.color, borderRadius: joined ? 2 : SPINE_R }]}>
@@ -91,7 +92,12 @@ export function SpineFace({ book, width, height, joined }) {
           },
         ]}
       >
-        <Text numberOfLines={1} style={[styles.spineTitle, { fontSize, color: fg }]}>
+        <Text
+          numberOfLines={1}
+          adjustsFontSizeToFit
+          minimumFontScale={0.6}
+          style={[styles.spineTitle, { fontSize, color: fg }]}
+        >
           {book.title}
         </Text>
       </View>
@@ -168,10 +174,15 @@ export function CoverFace({ book, width, height, tabStyle }) {
   );
 }
 
-function pageShape(xh, xo, yt, yb, curve) {
+// curveB: 경첩 쪽 아래 모서리가 바깥 아래 모서리보다 올라가는 양(기본은 위쪽 curve 와 같다)
+export function pageShape(xh, xo, yt, yb, curve, curveB = curve) {
   const cx = xh + (xo - xh) * 0.35;
-  return `M${xh} ${yt + curve} Q${cx} ${yt - 1} ${xo} ${yt} L${xo} ${yb} Q${cx} ${yb + 1} ${xh} ${yb - curve} Z`;
+  return `M${xh} ${yt + curve} Q${cx} ${yt - 1} ${xo} ${yt} L${xo} ${yb} Q${cx} ${yb + 1} ${xh} ${yb - curveB} Z`;
 }
+
+// 두 쪽이 만나는 가운데(경첩)에서 종이 아래 끝이 닿는 높이(실물 높이 기준 아래 여백). 읽은 쪽과 남은 쪽의
+// 두께가 달라도 두 쪽이 가운데에서 같은 높이로 맞닿게 한다. 두께 합이 늘 14 라서 평균 7 → 0.6*7 + 2.5.
+export const GUTTER_UP = 6.7;
 
 // 하드커버 안쪽 바깥 모서리의 대각선 접힘 자국. 겉표지 천을 판지 안쪽으로 접어 넘길 때
 // 모서리를 45도로 겹쳐 접어서 생기는 선이다. 어두운 접힘선 옆에 밝은 선을 나란히 그어 천이 겹친 턱을 낸다.
@@ -216,6 +227,8 @@ export function PageBlock({ book, side, width, height, stack, children }) {
   const topOuter = xo - stack;
   const topBottom = yb - stack * 0.6;
   const n = Math.max(2, Math.round(stack / 1.3));
+  // 경첩 쪽 아래 끝은 두 쪽 모두 이 높이에서 만난다 (종이 두께 층은 거기서부터 바깥으로 두꺼워진다)
+  const gutterBottom = yb - GUTTER_UP;
 
   const layers = [];
   for (let i = n; i >= 1; i--) {
@@ -223,7 +236,7 @@ export function PageBlock({ book, side, width, height, stack, children }) {
     layers.push(
       <Path
         key={i}
-        d={pageShape(xh, topOuter + off, yt + off * 0.12, topBottom + off * 0.6, 2.5)}
+        d={pageShape(xh, topOuter + off, yt + off * 0.12, topBottom + off * 0.6, 2.5, topBottom + off * 0.6 - gutterBottom)}
         fill={i % 2 ? '#F1EADC' : '#E6DCC9'}
         stroke={colors.paperEdge}
         strokeWidth={0.4}
@@ -289,7 +302,7 @@ export function PageBlock({ book, side, width, height, stack, children }) {
           {[7, 4.5, 2.5].map((w, k) => (
             <Path
               key={`shade${k}`}
-              d={pageShape(xh, topOuter + stack + 0.8, yt + stack * 0.12 + 0.8, topBottom + stack * 0.6 + 1.2, 2.5)}
+              d={pageShape(xh, topOuter + stack + 0.8, yt + stack * 0.12 + 0.8, topBottom + stack * 0.6 + 1.2, 2.5, topBottom + stack * 0.6 + 1.2 - gutterBottom)}
               fill="none"
               stroke="#000"
               strokeOpacity={0.05 + k * 0.03}
@@ -298,8 +311,8 @@ export function PageBlock({ book, side, width, height, stack, children }) {
             />
           ))}
           {layers}
-          <Path d={pageShape(xh, topOuter, yt, topBottom, 2.5)} fill={`url(#paper${side})`} />
-          <Path d={pageShape(xh, topOuter, yt, topBottom, 2.5)} fill={`url(#gutter${side})`} />
+          <Path d={pageShape(xh, topOuter, yt, topBottom, 2.5, topBottom - gutterBottom)} fill={`url(#paper${side})`} />
+          <Path d={pageShape(xh, topOuter, yt, topBottom, 2.5, topBottom - gutterBottom)} fill={`url(#gutter${side})`} />
         </G>
       </Svg>
       <View
@@ -342,9 +355,10 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     transform: [{ rotate: '90deg' }],
   },
+  // 한글은 자간을 벌리면 성겨 보인다 — 굵은 글꼴에 자간을 살짝 좁혀 책등 제목답게 묵직하게
   spineTitle: {
-    fontFamily: font.semibold,
-    letterSpacing: 0.5,
+    fontFamily: font.bold,
+    letterSpacing: -0.3,
     textAlign: 'center',
   },
   ringWrap: {

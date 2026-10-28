@@ -4,7 +4,7 @@ import { View, Text, Pressable, StyleSheet } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { useFonts } from 'expo-font';
 
-import { init, useStore, addBook, updateBook, removeBook, updateProgress } from './src/store';
+import { init, useStore, addBook, updateBook, removeBook, updateProgress, moveBook } from './src/store';
 import WoodShelf from './src/WoodShelf';
 import AddBookModal from './src/AddBookModal';
 import BookStage from './src/BookStage';
@@ -74,6 +74,9 @@ export default function App() {
         <AddBookModal
           visible={addVisible || !!editingBook}
           book={editingBook}
+          index={editingBook ? state.books.findIndex((b) => b.id === editingBook.id) : -1}
+          count={state.books.length}
+          onMove={moveBook}
           onClose={closeSheet}
           onSubmit={(payload) => {
             if (editingBook) {

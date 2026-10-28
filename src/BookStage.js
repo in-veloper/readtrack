@@ -1,7 +1,7 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, TextInput, StyleSheet, Pressable, BackHandler, Keyboard } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import Svg, { Defs, RadialGradient, Stop, Ellipse, Path } from 'react-native-svg';
+import Svg, { Defs, RadialGradient, LinearGradient as SvgGradient, Stop, Ellipse, Path, G } from 'react-native-svg';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
   useSharedValue,
@@ -16,7 +16,7 @@ import Animated, {
   Extrapolation,
 } from 'react-native-reanimated';
 
-import { SpineFace, CoverFace, PageBlock } from './faces';
+import { SpineFace, CoverFace, PageBlock, pageShape, GUTTER_UP } from './faces';
 import { SCREEN, PAGE_W, BOOK_H, CLOSED_SCALE, baseThickness } from './geometry';
 import { colors, font } from './theme';
 import { progressRatio } from './store';
@@ -91,69 +91,100 @@ function LeftPageContent({ book, pct, remain }) {
   );
 }
 
-// 읽은 만큼의 종이 한 장. 덮을 때 표지만 넘어가는 게 아니라 읽은 쪽 묶음이 표지와 함께 넘어오고,
-// 맨 윗장(g 가 가장 큰 장)이 앞서고 표지가 뒤따르며 부채처럼 벌어졌다가 오른쪽에 차곡차곡 포개진다.
-// 표지 진행도 u(0 덮임 ~ 1 펼침)를 u^(1+g) 로 바꿔 장마다 앞서는 정도만 달리하고, 시작(1)과 끝(0)에서는
-// 표지와 같은 자리에 오게 한다. 표지 뒷면(왼쪽 면)과 같은 회전·보정 식을 쓴다.
-function sheetAngle(pv, ov, g) {
+// 읽은 만큼의 종이 한 장. 덮을 때 표지만 넘어가는 게 아니라 읽은 쪽 묶음이 표지와 함께 넘어온다.
+// 장마다 넘어가는 속도가 달라서, 맨 윗장이 가장 빨리 넘어가 먼저 오른쪽에 내려앉고, 아래 장일수록 늦게
+// 따라와 앞서 내려앉은 장 위를 차례로 덮는다. 표지가 맨 마지막이다. 모두 같은 때에 들리기 시작하므로
+// 표지가 아직 왼쪽에 깔린 장을 뚫고 지나가는 일은 없다(항상 표지 ≥ 아래 장 ≥ 위 장 순으로 각도가 크다).
+// 표지 진행도 t(0 펼침 ~ 1 덮임)를 장마다 다른 구간 w 안에서 0→1 로 바꿔(끝으로 갈수록 감속) 쓴다.
+function sheetAngle(pv, ov, w) {
   'worklet';
-  const u = phiOf(ov) / 180;
-  return 270 - thetaOf(pv, ov) - 180 * Math.pow(u, 1 + g);
+  const t = 1 - phiOf(ov) / 180;
+  const c = Math.min(1, t / w);
+  return 270 - thetaOf(pv, ov) - 180 * (1 - c * (2 - c));
 }
 
-function Sheet({ p, o, ws, hs, g, top, tone, children }) {
+// 뒤집혀 보이는 순간부터는 글이 거울상으로 비치므로 세워지기 전에 서서히 지운다.
+// 맨 윗장만 쓰는 부분은 따로 떼어, 나머지 장에서는 프레임마다 도는 스타일 계산이 늘지 않게 한다.
+function SheetContent({ p, o, w, children }) {
+  const content = useAnimatedStyle(() => ({
+    opacity: interpolate(sheetAngle(p.value, o.value, w), [76, 88], [1, 0], CLAMP),
+  }));
+  return (
+    <Animated.View style={[StyleSheet.absoluteFill, content]} pointerEvents="none">
+      {children}
+    </Animated.View>
+  );
+}
+
+function SheetShade({ p, o, w }) {
+  const shade = useAnimatedStyle(() => ({
+    opacity: Math.min(0.3, (Math.max(0, sheetAngle(p.value, o.value, w)) / 90) * 0.3),
+  }));
+  return <Animated.View style={[StyleSheet.absoluteFill, styles.shade, styles.sheetShadeBox, shade]} pointerEvents="none" />;
+}
+
+// 장은 두 번 그린다. 왼쪽에 있을 때(앞면이 보일 때)는 위 장이 아래 장 위에 와야 하고, 오른쪽으로 넘어간 뒤에는
+// 나중에 내려앉은(아래) 장이 먼저 내려앉은(위) 장 위에 와야 해서 겹치는 순서가 서로 반대다. 그래서
+// 같은 장을 "왼쪽용"과 "오른쪽용"으로 하나씩 만들어 세워진 순간(b=90°)에 서로 바꿔 보여 준다.
+function Sheet({ p, o, ws, hs, cb, w, top, side, tone, children }) {
   // ※ 공유값은 스타일 함수 안에서 직접 읽는다(위 주석 참고)
   const outer = useAnimatedStyle(() => {
-    const b = sheetAngle(p.value, o.value, g);
-    // 펼친 상태에서는 맨 윗장만 보이게(아래 장들은 그 밑에 완전히 겹쳐 있다)
-    const u = phiOf(o.value) / 180;
-    return { opacity: top ? 1 : interpolate(u, [0.97, 0.99], [1, 0], CLAMP), ...pin(b, ws / 2) };
+    const b = sheetAngle(p.value, o.value, w);
+    const op = side === 'L' ? interpolate(b, [84, 90], [1, 0], CLAMP) : interpolate(b, [90, 96], [0, 1], CLAMP);
+    return { opacity: op, ...pin(b, ws / 2) };
   });
-  const inner = useAnimatedStyle(() => spin(sheetAngle(p.value, o.value, g)));
-  const shade = useAnimatedStyle(() => ({
-    opacity: Math.min(0.3, (Math.max(0, sheetAngle(p.value, o.value, g)) / 90) * 0.3),
-  }));
+  const inner = useAnimatedStyle(() => spin(sheetAngle(p.value, o.value, w)));
+
+  const gradient = top && side === 'L';
+  const d = pageShape(0, ws, 1, hs + 1, 2.5, cb);
 
   return (
     <Animated.View
       style={[styles.face, { width: ws, height: hs, top: M + 6, left: HINGE - ws }, outer]}
       pointerEvents="none"
     >
-      <Animated.View style={[{ width: ws, height: hs, borderRadius: 2, backgroundColor: tone }, inner]} renderToHardwareTextureAndroid>
-        {top && (
-          <>
-            {/* 왼쪽 면 종이와 같은 결(바깥은 밝고 경첩 쪽으로 어두워짐) — 펼친 상태에서 그 면과 겹쳐도 티가 안 난다 */}
-            <LinearGradient
-              colors={['#F2EBDD', '#F9F5EC', '#F7F2E8', '#EFE7D7', '#E3D8C3']}
-              locations={[0, 0.15, 0.78, 0.93, 1]}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 0 }}
-              style={StyleSheet.absoluteFill}
-            />
-            <LinearGradient
-              colors={[
-                'rgba(58,46,28,0)',
-                'rgba(58,46,28,0)',
-                'rgba(58,46,28,0.025)',
-                'rgba(58,46,28,0.06)',
-                'rgba(58,46,28,0.11)',
-                'rgba(58,46,28,0.16)',
-              ]}
-              locations={[0, 0.74, 0.85, 0.92, 0.97, 1]}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 0 }}
-              style={StyleSheet.absoluteFill}
-            />
-          </>
-        )}
-        {!top && <View style={[StyleSheet.absoluteFill, styles.sheetEdge]} />}
-        {children}
-        <Animated.View style={[StyleSheet.absoluteFill, styles.shade, shade]} />
+      <Animated.View style={[{ width: ws, height: hs }, inner]} renderToHardwareTextureAndroid>
+        {/* 종이 모양은 왼쪽 면 종이와 똑같은 윤곽(경첩 쪽 위·아래 모서리가 살짝 파인 곡선)으로 그린다 */}
+        <Svg width={ws} height={hs + 2} style={{ position: 'absolute', left: 0, top: -1 }}>
+          {gradient && (
+            <Defs>
+              <SvgGradient id="sheetPaper" x1="0" y1="0" x2="1" y2="0">
+                <Stop offset="0" stopColor="#E3D8C3" />
+                <Stop offset="0.07" stopColor="#EFE7D7" />
+                <Stop offset="0.22" stopColor="#F7F2E8" />
+                <Stop offset="0.85" stopColor="#F9F5EC" />
+                <Stop offset="1" stopColor="#F2EBDD" />
+              </SvgGradient>
+              <SvgGradient id="sheetGutter" x1="0" y1="0" x2="1" y2="0">
+                <Stop offset="0" stopColor="#3A2E1C" stopOpacity="0.16" />
+                <Stop offset="0.03" stopColor="#3A2E1C" stopOpacity="0.11" />
+                <Stop offset="0.08" stopColor="#3A2E1C" stopOpacity="0.06" />
+                <Stop offset="0.15" stopColor="#3A2E1C" stopOpacity="0.025" />
+                <Stop offset="0.26" stopColor="#3A2E1C" stopOpacity="0" />
+              </SvgGradient>
+            </Defs>
+          )}
+          <G transform={`translate(${ws},0) scale(-1,1)`}>
+            {gradient ? (
+              <>
+                <Path d={d} fill="url(#sheetPaper)" />
+                <Path d={d} fill="url(#sheetGutter)" />
+              </>
+            ) : (
+              <Path d={d} fill={tone} stroke={colors.paperEdge} strokeWidth={0.4} />
+            )}
+          </G>
+        </Svg>
+        {children ? (
+          <SheetContent p={p} o={o} w={w}>
+            {children}
+          </SheetContent>
+        ) : null}
+        {top ? <SheetShade p={p} o={o} w={w} /> : null}
       </Animated.View>
     </Animated.View>
   );
 }
-
 export default function BookStage({ book, origin, onClosed, onSave }) {
   const tb = baseThickness(book);
 
@@ -255,6 +286,14 @@ export default function BookStage({ book, origin, onClosed, onSave }) {
 
   // 덮힌 책: 손가락 따라 위로 들리다가 놓으면 책장으로.
   // 펼친 책: 위로 끄는 만큼 책이 접히고, 놓으면 마저 접혀서 책장으로(덜 끌었으면 다시 펼쳐짐).
+  // 끌기가 시작된 동안엔 여백 탭(아래 배경 Pressable)이 같이 눌린 걸로 처리되지 않게 표시해 둔다.
+  // 손을 뗄 때 끌기 종료와 탭 판정이 거의 동시에 오므로, 종료 후 잠깐 뒤에 푼다.
+  const panning = useRef(false);
+  const markPan = useCallback((on) => {
+    if (on) panning.current = true;
+    else setTimeout(() => { panning.current = false; }, 150);
+  }, []);
+
   const pan = useMemo(() => {
     const isOpen = phase === 'open';
     const hideKeyboard = () => Keyboard.dismiss();
@@ -263,7 +302,11 @@ export default function BookStage({ book, origin, onClosed, onSave }) {
       .activeOffsetY([-12, 12])
       .failOffsetX([-40, 40])
       .onStart(() => {
+        runOnJS(markPan)(true);
         if (isOpen) runOnJS(hideKeyboard)();
+      })
+      .onFinalize(() => {
+        runOnJS(markPan)(false);
       })
       .onUpdate((e) => {
         const up = Math.min(0, e.translationY);
@@ -275,9 +318,11 @@ export default function BookStage({ book, origin, onClosed, onSave }) {
         }
       })
       .onEnd((e) => {
+        // 빠른 탭에 섞인 손가락 떨림(속도만 큼)이 접기로 오인되지 않게 최소 이동량도 본다.
+        const flick = e.translationY < -40;
         const go = isOpen
-          ? o.value < 0.65 || e.velocityY < -700
-          : e.translationY < -80 || e.velocityY < -650;
+          ? o.value < 0.65 || (flick && e.velocityY < -700)
+          : e.translationY < -80 || (flick && e.velocityY < -650);
         if (go) {
           runOnJS(shelve)();
         } else {
@@ -285,7 +330,20 @@ export default function BookStage({ book, origin, onClosed, onSave }) {
           drag.value = withSpring(0, { damping: 18, stiffness: 200 });
         }
       });
-  }, [phase, shelve]);
+  }, [phase, shelve, markPan]);
+
+  // 책 말고 빈 여백을 톡 치면 위로 끌 때처럼 접혀서 책장으로 들어간다.
+  // 단계가 막 바뀐 직후의 탭은 무시한다 — 책을 꺼내 펼치려고 연달아 누른 손가락이 여백으로 새어
+  // 도로 꽂히는 일이 없도록.
+  const phaseAt = useRef(Date.now());
+  useEffect(() => {
+    phaseAt.current = Date.now();
+  }, [phase]);
+
+  const tapOutside = () => {
+    if (panning.current || Date.now() - phaseAt.current < 500) return;
+    shelve();
+  };
 
   /* ---------- 애니메이션 ---------- */
 
@@ -369,11 +427,21 @@ export default function BookStage({ book, origin, onClosed, onSave }) {
   const rightStack = 2 + 10 * (1 - ratio);
 
   // 덮을 때 표지와 함께 넘어오는 읽은 종이 묶음. 읽은 비율이 클수록 장수가 많고 더 넓게 벌어진다.
-  const sheetCount = book.currentPage > 0 ? Math.max(2, Math.min(8, Math.round(2 + 6 * ratio))) : 0;
-  const fan = 0.35 + 0.9 * ratio;
+  // 장마다 뷰·그림·애니메이션 계산이 붙고 두 번씩 그려서, 많이 두면 버벅인다 — 최대 4장.
+  const sheetCount = book.currentPage > 0 ? Math.max(2, Math.min(4, Math.round(2 + 2 * ratio))) : 0;
+  // 장마다 넘어가는 속도(구간 w, 작을수록 빨리 넘어감)를 달리한다: 맨 윗장은 덮는 동작의 앞쪽 절반 안에 끝나고,
+  // 아래 장일수록 늦게 따라오며, 표지가 맨 마지막에 닫힌다. 천천히 끌어도 장이 한 장씩 차례로 넘어와 겹친다.
   const sheetW = PAGE_W - 6 - leftStack;
   const sheetH = BOOK_H - 12 - 0.6 * leftStack;
-  const SHEET_TONES = ['#F1EADC', '#E6DCC9'];
+  // 경첩 쪽 아래 모서리가 오른쪽 면과 같은 높이에서 만나도록(faces.js 의 GUTTER_UP 참고)
+  const sheetCurveB = GUTTER_UP - 0.6 * leftStack;
+  const wTop = 0.45 - 0.2 * ratio;
+  const wLow = 0.85;
+  const sheets = Array.from({ length: sheetCount }, (_, i) => ({
+    i,
+    top: i === sheetCount - 1,
+    w: sheetCount > 1 ? wLow - ((wLow - wTop) * i) / (sheetCount - 1) : wTop,
+  }));  const SHEET_TONES = ['#F1EADC', '#E6DCC9'];
 
   const hintVisible = phase === 'closed' || phase === 'open';
   // 펼친 면들은 책을 다 꺼낸 뒤에 만든다(꺼내는 첫 프레임에 무거운 그림을 한꺼번에 만들면 버벅임).
@@ -389,7 +457,16 @@ export default function BookStage({ book, origin, onClosed, onSave }) {
           />
         </Animated.View>
 
+        {/* 맨 뒤 배경: 책 밖 빈 곳을 탭하면 책이 접혀 들어간다 */}
+        <Pressable style={StyleSheet.absoluteFill} onPress={tapOutside} accessible={false} />
+
         <Animated.View style={[styles.stage, stageStyle]} pointerEvents="box-none">
+          {/* 펼친 책 위의 탭은 접힘으로 치지 않도록 책 크기만큼 터치를 받아 막아 둔다(왼쪽 면은 터치를 통과시키기 때문) */}
+          {phase === 'open' && (
+            <View
+              style={{ position: 'absolute', left: HINGE - PAGE_W - 12, top: M - 12, width: PAGE_W * 2 + 24, height: BOOK_H + 24 }}
+            />
+          )}
           <Animated.View style={[styles.ground, groundStyle]} pointerEvents="none">
             <Svg width={PAGE_W * 2} height={40}>
               <Defs>
@@ -460,30 +537,44 @@ export default function BookStage({ book, origin, onClosed, onSave }) {
           </Animated.View>
           )}
 
-          {/* 읽은 종이 묶음: 표지 앞쪽에서 먼저 넘어오고, 맨 윗장이 가장 앞선다 */}
+          {/* 읽은 종이 묶음 — 왼쪽에 있는 동안 보이는 장(위 장이 위로)과, 오른쪽으로 넘어간 뒤 보이는 장(아래 장이 위로)을
+              따로 둔다. 겹치는 순서가 서로 반대라서 장 하나를 두 번 그려 세워진 순간에 바꿔 보여 준다. */}
           {pagesReady &&
-            Array.from({ length: sheetCount }, (_, i) => {
-              const top = i === sheetCount - 1;
-              return (
-                <Sheet
-                  key={i}
-                  p={p}
-                  o={o}
-                  ws={sheetW}
-                  hs={sheetH}
-                  g={(fan * (i + 1)) / sheetCount}
-                  top={top}
-                  tone={SHEET_TONES[i % 2]}
-                >
-                  {top && (
-                    <View style={{ position: 'absolute', left: 10, width: sheetW - 26, top: 16, bottom: 10 }}>
-                      <LeftPageContent book={book} pct={pct} remain={remain} />
-                    </View>
-                  )}
-                </Sheet>
-              );
-            })}
-
+            sheets.map((s) => (
+              <Sheet
+                key={`l${s.i}`}
+                side="L"
+                p={p}
+                o={o}
+                ws={sheetW}
+                hs={sheetH}
+                cb={sheetCurveB}
+                w={s.w}
+                top={s.top}
+                tone={SHEET_TONES[s.i % 2]}
+              >
+                {s.top && (
+                  <View style={{ position: 'absolute', left: 10, width: sheetW - 26, top: 16, bottom: 10 }}>
+                    <LeftPageContent book={book} pct={pct} remain={remain} />
+                  </View>
+                )}
+              </Sheet>
+            ))}
+          {pagesReady &&
+            [...sheets].reverse().map((s) => (
+              <Sheet
+                key={`r${s.i}`}
+                side="R"
+                p={p}
+                o={o}
+                ws={sheetW}
+                hs={sheetH}
+                cb={sheetCurveB}
+                w={s.w}
+                top={s.top}
+                tone={SHEET_TONES[s.i % 2]}
+              />
+            ))}
           {/* 넘어가는 앞표지: 앞면 — 종이 묶음보다 나중에 그려서 넘어온 뒤엔 종이를 덮는다 */}
           <Animated.View style={[styles.face, { width: PAGE_W, left: HINGE }, coverOuter]} pointerEvents="none">
             <Animated.View style={[{ width: PAGE_W, height: BOOK_H }, coverInner]} renderToHardwareTextureAndroid>
@@ -498,10 +589,10 @@ export default function BookStage({ book, origin, onClosed, onSave }) {
             onPress={openBook}
             style={{
               position: 'absolute',
-              left: geo.xc - tb * 0.3 * geo.kc - 10,
-              top: geo.yc - (BOOK_H * geo.kc) / 2,
-              width: (PAGE_W + tb * 0.3) * geo.kc + 20,
-              height: BOOK_H * geo.kc,
+              left: geo.xc - tb * 0.3 * geo.kc - 40,
+              top: geo.yc - (BOOK_H * geo.kc) / 2 - 30,
+              width: (PAGE_W + tb * 0.3) * geo.kc + 80,
+              height: BOOK_H * geo.kc + 60,
             }}
           />
         )}
@@ -560,6 +651,9 @@ const styles = StyleSheet.create({
   },
   shade: {
     backgroundColor: '#000',
+  },
+  sheetShadeBox: {
+    borderRadius: 2,
   },
   sheetEdge: {
     borderWidth: 0.5,

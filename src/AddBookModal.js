@@ -18,7 +18,7 @@ function Field({ label, children, style }) {
 }
 
 // book 을 넘기면 "고치기" 모드 — 같은 시트로 제목·색·쪽수를 바꾸고 책을 뺄 수도 있다.
-export default function AddBookModal({ visible, book, onClose, onSubmit, onDelete }) {
+export default function AddBookModal({ visible, book, index = -1, count = 0, onMove, onClose, onSubmit, onDelete }) {
   const editing = !!book;
   const [title, setTitle] = useState('');
   const [totalPages, setTotalPages] = useState('');
@@ -130,6 +130,38 @@ export default function AddBookModal({ visible, book, onClose, onSubmit, onDelet
               />
             </Field>
           </View>
+
+          {editing && onMove ? (
+            // 책장에서의 자리 바꾸기 — 누를 때마다 한 칸씩, 뒤 시트에서 책이 옮겨 가는 게 보인다.
+            <View style={styles.moveRow}>
+              <Text style={styles.label}>책장에서의 자리</Text>
+              <View style={styles.moveBtns}>
+                <Pressable
+                  onPress={() => onMove(book.id, -1)}
+                  disabled={index <= 0}
+                  style={({ pressed }) => [styles.moveBtn, index <= 0 && styles.moveBtnOff, pressed && { opacity: 0.7 }]}
+                  hitSlop={4}
+                >
+                  <Text style={styles.moveText}>← 앞으로</Text>
+                </Pressable>
+                <Text style={styles.moveCount}>
+                  {index + 1} / {count}
+                </Text>
+                <Pressable
+                  onPress={() => onMove(book.id, 1)}
+                  disabled={index < 0 || index >= count - 1}
+                  style={({ pressed }) => [
+                    styles.moveBtn,
+                    (index < 0 || index >= count - 1) && styles.moveBtnOff,
+                    pressed && { opacity: 0.7 },
+                  ]}
+                  hitSlop={4}
+                >
+                  <Text style={styles.moveText}>뒤로 →</Text>
+                </Pressable>
+              </View>
+            </View>
+          ) : null}
 
           <Pressable
             onPress={submit}
@@ -254,6 +286,34 @@ const styles = StyleSheet.create({
   },
   rowItem: {
     flex: 1,
+  },
+  moveRow: {
+    marginTop: 2,
+    marginBottom: 4,
+  },
+  moveBtns: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  moveBtn: {
+    paddingVertical: 10,
+    paddingHorizontal: 18,
+    borderRadius: 12,
+    backgroundColor: colors.field,
+  },
+  moveBtnOff: {
+    opacity: 0.35,
+  },
+  moveText: {
+    fontFamily: font.semibold,
+    fontSize: 14,
+    color: colors.navy,
+  },
+  moveCount: {
+    fontFamily: font.semibold,
+    fontSize: 13,
+    color: colors.inkSoft,
   },
   submit: {
     marginTop: 6,

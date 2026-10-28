@@ -97,6 +97,19 @@ export function updateBook(id, patch) {
   persist();
 }
 
+// 책장 순서에서 책을 delta 칸(-1 앞, +1 뒤) 옮긴다. 줄은 순서대로 채워지므로 줄 경계도 넘어간다.
+export function moveBook(id, delta) {
+  const from = state.books.findIndex((b) => b.id === id);
+  if (from < 0) return;
+  const to = Math.max(0, Math.min(state.books.length - 1, from + delta));
+  if (to === from) return;
+  const books = state.books.slice();
+  const [book] = books.splice(from, 1);
+  books.splice(to, 0, book);
+  emit({ books });
+  persist();
+}
+
 export function removeBook(id) {
   emit({ books: state.books.filter((b) => b.id !== id) });
   persist();
